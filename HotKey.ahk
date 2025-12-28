@@ -1,5 +1,6 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
+ProcessSetPriority "High"
 
 ; =================================================================
 ; 1. 全局配置 (数据驱动层)
@@ -58,6 +59,7 @@ for tpl in GlobalConfig.Templates {
 !c:: (active := WinExist("A")) ? WinClose(active) : 0
 !Up:: WinMaximize("A")
 !Down:: CenterWindow("A")
+!a:: ToggleAlwaysOnTop("A")
 
 ; 循环分屏 (Alt + Left/Right)
 !Left::CycleSnap("Left")
@@ -120,40 +122,63 @@ SmartActivate(TargetIdentifier, PathOrEXE := "") {
                 throw Error("未提供路径")
             return RunNewInstance(PathOrEXE)
         }
-
         activeID := WinExist("A")
-        isCurrentActive := false
+
+        isCurrentInGroup := false
         for id in fullList {
             if (id = activeID) {
-                isCurrentActive := true
+                isCurrentInGroup := true
                 break
             }
         }
-
-        if (isCurrentActive) {
-            WinMinimize(activeID)
-            LastIDMap[TargetIdentifier] := activeID
+        if (isCurrentInGroup) {
+            ; 检查当前激活窗口的置顶状态
+            isTopmost := WinGetExStyle(activeID) & 0x8
+            
+            if (isTopmost) {
+                ; --- 置顶模式：直接循环切换下一个 ---
+                if (fullList.Length > 1) {
+                    nextIndex := 1
+                    for index, id in fullList {
+                        if (id = activeID) {
+                            nextIndex := Mod(index, fullList.Length) + 1
+                            break
+                        }
+                    }
+                    targetID := fullList[nextIndex]
+                    if WinGetMinMax(targetID) = -1 
+                        WinRestore(targetID)
+                    WinActivate(targetID)
+                    LastIDMap[TargetIdentifier] := targetID
+                } else {
+                    ToolTip("📍 仅有一个窗口且已置顶")
+                    SetTimer () => ToolTip(), -1000
+                }
+            } else {
+                ; --- 普通模式：按一下直接隐藏 ---
+                WinMinimize(activeID)
+                return 
+            }
         } else {
-            ; 找到下个窗口的逻辑
             nextIndex := 1
             for index, id in fullList {
                 if (id = LastIDMap[TargetIdentifier]) {
-                    nextIndex := index + 1
+                    nextIndex := Mod(index, fullList.Length) + 1
                     break
                 }
             }
-            if (nextIndex > fullList.Length) 
-                nextIndex := 1
-
+            
             targetID := fullList[nextIndex]
+            
             if WinGetMinMax(targetID) = -1 
                 WinRestore(targetID)
             
             WinActivate(targetID)
             LastIDMap[TargetIdentifier] := targetID
         }
+        
     } catch Any as e {
-        NotifyError("激活失败: " e.Message)
+        NotifyError("操作失败: " e.Message)
     }
 }
 
@@ -249,6 +274,19 @@ NewFileFromExplorer(Extension, TemplateContent := "") {
     } catch Any as e {
         NotifyError("新建文件失败: " e.Message)
     }
+}
+
+; 窗口置顶
+ToggleAlwaysOnTop(winTitle) {
+    if !(hwnd := WinExist(winTitle))
+        return
+    
+    WinSetAlwaysOnTop(-1, hwnd)
+    isTop := WinGetExStyle(hwnd) & 0x8
+    
+    ; 视觉反馈
+    ToolTip(isTop ? "📌 窗口已置顶" : "🔓 已取消置顶")
+    SetTimer () => ToolTip(), -1500
 }
 
 ; =================================================================
