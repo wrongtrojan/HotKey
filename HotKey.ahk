@@ -297,4 +297,4 @@ GetMonitorIndexFromWindow(hwnd) {
 NotifyError(msg) {
     ToolTip("Error: " msg)
     SetTimer () => ToolTip(), -3000
-}
+} 
