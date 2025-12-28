@@ -28,7 +28,8 @@ global GlobalConfig := {
     ; 窗口管理参数
     Settings: {
         SwitchThreshold: 800,    ; Alt+F 连续切换间隔 (ms)
-        SnapRatios: [0.618, 0.50, 0.382]
+        SnapRatios: [0.618, 0.50, 0.382],
+        CenterRatio: 0.7
     }
 }
 
@@ -53,81 +54,57 @@ for tpl in GlobalConfig.Templates {
 ;    常规的快捷键定义，如分屏、关闭窗口、遍历切换等
 ; =================================================================
 
-;窗口快速关闭 Alt + C
-!c:: {
-    if (active := WinExist("A"))
-        WinClose(active)
-}
+; 窗口基础管理
+!c:: (active := WinExist("A")) ? WinClose(active) : 0
+!Up:: WinMaximize("A")
+!Down:: CenterWindow("A")
 
 ; 循环分屏 (Alt + Left/Right)
 !Left::CycleSnap("Left")
 !Right::CycleSnap("Right")
 
-; 全局窗口循环切换 Alt + F
+; 窗口循环切换逻辑封装
 global lastSwitchTime := 0
 global switchIndex := 1
+!f:: CycleTaskWindows()
 
-!f::
-{
-    global lastSwitchTime, switchIndex
-
-    currentTime := A_TickCount
-
-    ; 如果距离上次按键超过 800ms，重置索引，从头开始找
-    if (currentTime - lastSwitchTime > 800) {
-        switchIndex := 1
-    }
-
-    allWindows := WinGetList()
-    activeHWnd := WinExist("A")
-    validWindows := []
-
-    ; 1. 筛选符合条件的窗口
-    for hwnd in allWindows {
-        style := WinGetStyle(hwnd)
-        exStyle := WinGetExStyle(hwnd)
-        title := WinGetTitle(hwnd)
-
-        ; 核心逻辑改进：
-        ; - (style & 0x10000000): 窗口必须是可见状态
-        ; - WinGetMinMax(hwnd) != -1: 窗口不能是最小化状态
-        if (title != "" && (style & 0x10000000) && !(exStyle & 0x80)) {
-            try {
-                if (WinGetMinMax(hwnd) != -1 && !(title ~= "Program Manager|Taskbar")) {
-                    validWindows.Push(hwnd)
-                }
-            }
-        }
-    }
-
-    ; 2. 执行循环切换逻辑
-    if (validWindows.Length > 0) {
-        if (switchIndex > validWindows.Length) {
-            switchIndex := 1
-        }
-
-        targetHwnd := validWindows[switchIndex]
-
-        ; 如果目标是当前窗口且还有别的可选，跳过它
-        if (targetHwnd == activeHWnd && validWindows.Length > 1) {
-            switchIndex += 1
-            if (switchIndex > validWindows.Length) {
-                switchIndex := 1
-            }
-            targetHwnd := validWindows[switchIndex]
-        }
-
-        try {
-            WinActivate(targetHwnd)
-            switchIndex += 1
-            lastSwitchTime := currentTime
-        }
-    }
-}
 ; =================================================================
 ; 4. 核心功能函数 (业务逻辑层)
 ;    被热键调用的复杂逻辑实现
 ; =================================================================
+
+; 窗口循环切换
+CycleTaskWindows() {
+    global lastSwitchTime, switchIndex
+    currentTime := A_TickCount
+    
+    if (currentTime - lastSwitchTime > GlobalConfig.Settings.SwitchThreshold)
+        switchIndex := 1
+
+    validWindows := GetSwitchableWindows()
+    if (validWindows.Length == 0)
+        return
+
+    activeHWnd := WinExist("A")
+    if (switchIndex > validWindows.Length)
+        switchIndex := 1
+
+    targetHwnd := validWindows[switchIndex]
+
+    ; 窗口焦点循环逻辑
+    if (targetHwnd == activeHWnd && validWindows.Length > 1) {
+        switchIndex := Mod(switchIndex, validWindows.Length) + 1
+        targetHwnd := validWindows[switchIndex]
+    }
+
+    try {
+        if WinGetMinMax(targetHwnd) == -1
+            WinRestore(targetHwnd)
+        WinActivate(targetHwnd)
+        switchIndex := Mod(switchIndex, validWindows.Length) + 1
+        lastSwitchTime := currentTime
+    }
+}
 
 ;智能激活/最小化/启动函数
 SmartActivate(TargetIdentifier, PathOrEXE := "") {
@@ -180,6 +157,42 @@ SmartActivate(TargetIdentifier, PathOrEXE := "") {
     }
 }
 
+; 循环分屏实现
+CycleSnap(Side) {
+    static POS_MAP := Map("Left", 0, "Right", 0)
+    if !(hwnd := WinExist("A"))
+        return
+
+    POS_MAP[Side] := Mod(POS_MAP[Side], GlobalConfig.Settings.SnapRatios.Length) + 1
+    ratio := GlobalConfig.Settings.SnapRatios[POS_MAP[Side]]
+    
+    MonitorGetWorkArea(GetMonitorIndexFromWindow(hwnd), &L, &T, &R, &B)
+    
+    targetW := (R - L) * ratio
+    targetH := B - T
+    targetX := (Side == "Left") ? L : R - targetW
+    
+    MoveWindowIgnoreBorders(hwnd, targetX, T, targetW, targetH)
+}
+
+; 居中窗口实现
+CenterWindow(winTitle) {
+    if !(hwnd := WinExist(winTitle))
+        return
+
+    if (WinGetMinMax(hwnd) != 0)
+        WinRestore(hwnd)
+    
+    MonitorGetWorkArea(GetMonitorIndexFromWindow(hwnd), &L, &T, &R, &B)
+    ratio := GlobalConfig.Settings.CenterRatio
+    
+    targetW := (R - L) * ratio
+    targetH := (B - T) * ratio
+    targetX := L + (R - L - targetW) / 2
+    targetY := T + (B - T - targetH) / 2
+    
+    MoveWindowIgnoreBorders(hwnd, targetX, targetY, targetW, targetH)
+}
 
 ; 资源管理器新建文件
 NewFileFromExplorer(Extension, TemplateContent := "") {
@@ -238,38 +251,50 @@ NewFileFromExplorer(Extension, TemplateContent := "") {
     }
 }
 
-; 循环分屏函数
-CycleSnap(Side) {
-    static POS_MAP := Map("Left", 0, "Right", 0)
-    ratios := GlobalConfig.Settings.SnapRatios
-    
-    hwnd := WinExist("A")
-    if !hwnd 
-    return
-
-    try {
-        if WinGetMinMax(hwnd) != 0 
-            WinRestore(hwnd)
-
-        ; 获取显示器工作区
-        MonitorGetWorkArea(GetMonitorIndexFromWindow(hwnd), &L, &T, &R, &B)
-
-        POS_MAP[Side] := Mod(POS_MAP[Side], ratios.Length) + 1
-        
-        targetW := (R - L) * ratios[POS_MAP[Side]]
-        targetH := B - T
-        targetX := (Side == "Left") ? L : R - targetW
-        
-        WinMove(Floor(targetX), Floor(T), Floor(targetW), Floor(targetH), hwnd)
-    } catch Error as e {
-        NotifyError("分屏失败: " e.Message)
-    }
-}
-
 ; =================================================================
 ; 5. 底层辅助工具 (系统调用层)
 ;    通用的、不涉及业务逻辑的辅助函数
 ; =================================================================
+
+; 核心：处理 Win11 隐形边框，解决贴合缝隙问题
+MoveWindowIgnoreBorders(hwnd, x, y, w, h) {
+    ; 确保 hwnd 是数字类型
+    if !IsNumber(hwnd)
+        hwnd := WinExist(hwnd)
+    if !hwnd
+        return
+    ; 使用 DWM 获取视觉上的真实矩形 (DWMWA_EXTENDED_FRAME_BOUNDS = 9)
+    Rect := Buffer(16)
+    DllCall("dwmapi\DwmGetWindowAttribute", "ptr", hwnd, "uint", 9, "ptr", Rect, "uint", 16)
+    
+    ; 计算视觉尺寸和窗口原始尺寸的偏移
+    WinGetPos(,, &rW, &rH, hwnd)
+    vW := NumGet(Rect, 8, "int") - NumGet(Rect, 0, "int")
+    vH := NumGet(Rect, 12, "int") - NumGet(Rect, 4, "int")
+    
+    offsetX := (rW - vW) / 2
+    borderBottom := (rH - vH) 
+
+    ; 补偿偏移量，确保边缘物理对齐
+    WinMove(Floor(x - offsetX), Floor(y), Floor(w + (rW - vW)), Floor(h + borderBottom), hwnd)
+}
+
+; 获取当前有效窗口列表
+GetSwitchableWindows() {
+    allWindows := WinGetList()
+    validWindows := []
+    for hwnd in allWindows {
+        style := WinGetStyle(hwnd)
+        exStyle := WinGetExStyle(hwnd)
+        title := WinGetTitle(hwnd)
+        ; 过滤掉隐藏、无标题、系统托盘、任务栏、搜索窗口
+        if (title != "" && (style & 0x10000000) && !(exStyle & 0x80) && WinGetMinMax(hwnd) != -1) {
+            if !(title ~= "Program Manager|Taskbar|SearchHost")
+                validWindows.Push(hwnd)
+        }
+    }
+    return validWindows
+}
 
 ; 启动新实例函数
 RunNewInstance(Path) {
