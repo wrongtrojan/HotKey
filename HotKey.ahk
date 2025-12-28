@@ -2,27 +2,34 @@
 #SingleInstance Force
 
 ; =================================================================
-; 1. 软件切换配置区 (Alt + 字母)
-; 逻辑：已激活则隐藏 / 未激活则呼出 / 未启动则启动
+; 软件切换配置区 
+; Alt + N + 代号: 开启新窗口
+; Alt+代号: 已激活则隐藏 / 未激活则呼出 / 未启动则启动
 ; =================================================================
 
 ; 终端
-!t:: SmartActivate("ahk_class CASCADIA_HOSTING_WINDOW_CLASS", "wt.exe")
+!t:: GetKeyState("n", "P") ? RunNewInstance("wt.exe") : SmartActivate("ahk_class CASCADIA_HOSTING_WINDOW_CLASS", "wt.exe")
 
-; VS Code (新增)
-!v:: SmartActivate("ahk_exe Code.exe", "C:\Users\24051\Desktop\Code\Code.lnk")
+; VS Code
+!v:: {
+    path := "C:\Users\24051\Desktop\Code\Code.lnk"
+    GetKeyState("n", "P") ? RunNewInstance(path) : SmartActivate("ahk_exe Code.exe", path)
+}
 
 ; 文件资源管理器
 ; !e:: SmartActivate("ahk_class CabinetWClass", "explorer.exe")
 
 ; Everything
-!s:: SmartActivate("ahk_exe Everything.exe", "C:\Users\24051\Desktop\Tool\Everything.lnk")
+!s:: {
+    path := "C:\Users\24051\Desktop\Tool\Everything.lnk"
+    GetKeyState("n", "P") ? RunNewInstance(path) : SmartActivate("ahk_exe Everything.exe", path)
+}
 
 ; Chrome 
-!g:: SmartActivate("ahk_exe chrome.exe", "C:\Users\24051\Desktop\Search\Chrome.lnk")
-
-; Clash 
-; !c:: SmartActivate("ahk_exe Clash for Windows.exe", "C:\Users\24051\Desktop\Tool\ClashforWindows.lnk")
+!g:: {
+    path := "C:\Users\24051\Desktop\Search\Chrome.lnk"
+    GetKeyState("n", "P") ? RunNewInstance(path) : SmartActivate("ahk_exe chrome.exe", path)
+}
 
 ; QQ 
 !q:: SmartActivate("ahk_exe QQ.exe", "C:\Users\24051\Desktop\Social\QQ.lnk")
@@ -34,8 +41,8 @@
 !d:: SmartActivate("ahk_exe 豆包.exe", "C:\Users\24051\Desktop\ai\豆包.lnk")
 
 ; =================================================================
-; 2. 脚本创建配置区 (Ctrl + Alt + 字母)
-; 逻辑：在当前资源管理器目录下新建带模版的文件
+; 脚本文件创建配置区 
+; Ctrl + Alt + 后缀: 在当前资源管理器目录下新建带模版的文件
 ; =================================================================
 
 ; Markdown
@@ -54,8 +61,8 @@
 ^!k:: NewFileFromExplorer(".ahk", "; AutoHotkey v2 Script`n`n!j::MsgBox(`"Hello`")")
 
 ; =================================================================
-; 3. 窗口管理与系统增强区 (Alt + 功能)
-; 逻辑：针对当前可见窗口进行焦点调度或生命周期管理(关闭)
+; 窗口管理与系统增强区
+; Alt + 功能: 针对当前可见窗口进行焦点调度或生命周期管理(关闭)
 ; =================================================================
 
 ; 遍历切换变量初始化
@@ -120,6 +127,9 @@ global switchIndex := 1
     }
 }
 
+!Left::CycleSnap("Left")    ; Alt + 左箭头 → 左侧分屏
+!Right::CycleSnap("Right")  ; Alt + 右箭头 → 右侧分屏
+
 ; 关闭当前活动窗口 (Alt + C)
 !c::
 {
@@ -131,41 +141,39 @@ global switchIndex := 1
 }
 
 ; =================================================================
-; 4. 核心功能函数区
+; 核心功能函数区
 ; =================================================================
 
-; --- 软件智能切换函数 ---
+; --- 软件切换函数 ---
 /**
  * 智能激活/循环/隐藏函数
- * @param TargetIdentifier 窗口标识 (如 "ahk_class CabinetWClass")
- * @param PathOrEXE 程序路径
  */
 SmartActivate(TargetIdentifier, PathOrEXE := "") {
-    static lastShownID := 0  ; 静态变量保持记忆
+    ; 使用 Map 对象存储每个 TargetIdentifier 对应的最后一个窗口 ID
+    static LastIDMap := Map() 
+    
+    ; 初始化该标识的记录
+    if !LastIDMap.Has(TargetIdentifier)
+        LastIDMap[TargetIdentifier] := 0
+
     originalMode := A_TitleMatchMode
     SetTitleMatchMode(2)
 
     try {
-        ; v2 中 WinGetList 返回的是一个数组对象
         fullList := WinGetList(TargetIdentifier)
 
         ; --- 场景 1: 没有窗口 -> 启动程序 ---
         if (fullList.Length = 0) {
-            if (PathOrEXE = "") {
-                throw Error("未提供程序路径，无法启动。")
-            }
-            Run('"' PathOrEXE '"') ; v2 推荐用单引号包裹双引号
-            if WinWaitActive(TargetIdentifier, , 5) {
-                lastShownID := WinActive("A")
-            }
-            return true
+            if (PathOrEXE = "") 
+                throw Error("未提供程序路径")
+            RunNewInstance(PathOrEXE)
+            return
         }
 
         ; --- 场景 2: 逻辑判断 ---
         activeID := WinActive("A")
-        
-        ; 检查当前窗口是否属于目标程序 (v2 简洁写法)
         isActive := false
+        
         for id in fullList {
             if (id = activeID) {
                 isActive := true
@@ -174,37 +182,52 @@ SmartActivate(TargetIdentifier, PathOrEXE := "") {
         }
 
         if (isActive) {
-            ; 当前活动窗口就是目标之一 -> 最小化隐藏
+            ; 当前窗口已置顶 -> 最小化
             WinMinimize(activeID)
-            ; 记录最后操作的 ID，下次唤醒时可能想先唤醒这一个，或者跳过它
-            lastShownID := activeID 
+            LastIDMap[TargetIdentifier] := activeID 
         } else {
-            ; 当前不活动 -> 准备唤醒循环中的下一个
-            nextIndex := 1 ; 默认第一个
-            
+            ; 寻找循环起始点
+            nextIndex := 1 
             for index, id in fullList {
-                if (id = lastShownID) {
+                if (id = LastIDMap[TargetIdentifier]) {
                     nextIndex := index + 1
                     break
                 }
             }
-
-            ; 越界检查 (v2 数组索引从 1 开始)
-            if (nextIndex > fullList.Length) {
+            
+            ; 越界重置
+            if (nextIndex > fullList.Length) 
                 nextIndex := 1
-            }
 
             targetID := fullList[nextIndex]
-            WinRestore(targetID)
+            
+            ; 状态恢复与激活
+            if WinGetMinMax(targetID) = -1 
+                WinRestore(targetID)
+            
             WinActivate(targetID)
-            lastShownID := targetID
+            LastIDMap[TargetIdentifier] := targetID
         }
     }
-    catch Error as e {
-        MsgBox("执行出错：`n" e.Message)
+    catch Any as e {
+        ToolTip "执行出错: " e.Message
+        SetTimer () => ToolTip(), -3000
     }
     finally {
         SetTitleMatchMode(originalMode)
+    }
+}
+
+/**
+ * 强制运行新实例函数
+ */
+RunNewInstance(PathOrEXE) {
+    if (PathOrEXE = "") 
+    return
+    try {
+        Run('"' PathOrEXE '"')
+    } catch Any as e {
+        MsgBox("启动失败: " e.Message)
     }
 }
 
@@ -268,5 +291,55 @@ NewFileFromExplorer(Extension, TemplateContent := "") {
         
     } catch Error as e {
         MsgBox("发生错误: " e.Message)
+    }
+}
+
+/**
+ * 循环分屏函数 (一步到位版)
+ * 极致性能，无抖动，支持多显示器独立记忆
+ */
+CycleSnap(Side) {
+    static RATIOS := [0.618, 0.50, 0.382]
+    static POS_MAP := Map("Left", 0, "Right", 0)
+
+    if !(Side == "Left" || Side == "Right")
+        return
+
+    hwnd := WinExist("A")
+    if !hwnd 
+    return
+
+    try {
+        ; 1. 状态处理：如果窗口最大化，先还原
+        if WinGetMinMax(hwnd) != 0 
+            WinRestore(hwnd)
+
+        ; 2. 获取当前窗口位置以确定所在显示器
+        WinGetPos(&startX, &startY, &startW, &startH, hwnd)
+        midX := startX + startW/2
+        midY := startY + startH/2
+        
+        targetMon := 1
+        loop MonitorGetCount() {
+            MonitorGetWorkArea(A_Index, &mL, &mT, &mR, &mB)
+            if (midX >= mL && midX <= mR && midY >= mT && midY <= mB) {
+                targetMon := A_Index
+                break
+            }
+        }
+        MonitorGetWorkArea(targetMon, &L, &T, &R, &B)
+
+        ; 3. 计算目标尺寸
+        POS_MAP[Side] := Mod(POS_MAP[Side], RATIOS.Length) + 1
+        targetW := (R - L) * RATIOS[POS_MAP[Side]]
+        targetH := B - T
+        targetY := T
+        targetX := (Side == "Left") ? L : R - targetW
+
+        ; 4. 一步到位移动窗口
+        WinMove(Floor(targetX), Floor(targetY), Floor(targetW), Floor(targetH), hwnd)
+
+    } catch Error {
+        return
     }
 }
